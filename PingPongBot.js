@@ -8,7 +8,8 @@
 /***************************************************
  * @dev Bot settings to be configured by the user.
  */
-const DEPLOYMENT_TYPE = 'Not-Updateable';   // Either 'Updateable' or 'Not-Updateable', depending on whether the console can handle same-line updates.
+const DEPLOYMENT_TYPE = 'Updateable';   // Either 'Updateable' or 'Not-Updateable', depending on whether the console can handle same-line updates.
+const mockupFromBlock = '6268440';     // Set this to do a mock start a the designed block number.
 
 
 /***************************************************
@@ -79,6 +80,18 @@ colors.setTheme({
 /***************************************************
  * Initialize the bot
  */
+// Must initialize the storage package before using it. Can use default options.
+await storage.init();
+// Prepare the bot if this is a mock-run (for testing purposes).
+if (mockupFromBlock != '') {
+    console.log(('!!Mockup run in progress!!').titleColor);
+    await storage.setItem('addressBotIsRunningWith', accountAddress);
+    await storage.setItem('firstLoadBlockNumber', mockupFromBlock - 10);
+    await storage.setItem('lastCheckedBlockNumber', mockupFromBlock);
+    await storage.setItem('txQueue', '');
+    await storage.setItem('pendingTx', '');
+}
+// Call the main initialization function.
 initBot();
 
 
@@ -92,7 +105,6 @@ initBot();
 async function initBot() {
 
     try {
-        await storage.init();   // Must initialize the storage package before using it. Can use default options.
 
         // See https://docs.infura.io/tutorials/ethereum/call-a-contract for instructions to call contract method.
         // Add signing account to the local in-memory wallet.
@@ -176,12 +188,14 @@ async function processLatestBlock(blockNumber) {
     
     // Put this in a function, and call it in the code above to ensure gas estimates are complete before executing this code.
     async function finishLatestBlockProcessing() {
-        // If the bot is just starting, then perform some special functions.
+
+        // If the bot is just starting (this is the first block header it has seen), then perform some special functions.
         if (BOT_STARTING) {
             BOT_STARTING = false;       // Undo the BOT_STARTING flag.
             clearInterval(workingAnimationID);
             logUpdate(('\n' + new Date(Date.now()).toUTCString()).titleColor);
             logUpdate.done();
+
             // If this is a new original start for the bot with this account address, then save block number as the one when the bot started.
             let ORIGINAL_BOT_RUN = false;
             try {
@@ -192,7 +206,10 @@ async function processLatestBlock(blockNumber) {
                 ORIGINAL_BOT_RUN = true;
             }
             // If the bot has never run previously with this account.
-            if (firstLoadBlockNumber == '' || accountAddress != addressBotIsRunningWith) { ORIGINAL_BOT_RUN = true; }
+            if (firstLoadBlockNumber == '' || accountAddress != addressBotIsRunningWith) {
+                ORIGINAL_BOT_RUN = true;
+            }
+
             // If this is an original run for this account.
             if (ORIGINAL_BOT_RUN) {
                 firstLoadBlockNumber = blockNumber;
@@ -209,7 +226,7 @@ async function processLatestBlock(blockNumber) {
                 console.log('Bot has run with this account before, originally starting at block number ' + firstLoadBlockNumber + '.');
                 // Get the last checked block number from a previous session.
                 let fromBlock = await storage.getItem('lastCheckedBlockNumber');
-                ///* -> -> THIS LINE IS USED FOR TESTING PURPOSES ONLY -> -> */ if (MOCKUP) fromBlock = mockupFromBlock;
+                ///* -> -> THIS LINE IS USED FOR TESTING PURPOSES ONLY -> -> */ if (mockupFromBlock != '') fromBlock = mockupFromBlock;
                 if (fromBlock == '') {
                     console.log(('Storage item "lastCheckedBlockNumber" failed to be set in the previous bot session. Ignoring and waiting for next block.').errorColor);
                 }
@@ -230,7 +247,7 @@ async function processLatestBlock(blockNumber) {
                 })
             }
 
-        // Else if the bot has already processed at least one new block header.
+        // If the bot has already processed at least one new block header.
         } else {
             // Check that no blocks have been missed, for example due to internet going down temporarily.
             let previouslyCheckedBlockNumber = Number(await storage.getItem('lastCheckedBlockNumber'));
@@ -406,14 +423,12 @@ async function prepareAndSendTx(pongData, nonce) {
             // Update the pending tx flag.
             STATE_pendingTx = true;
             // Save key tx parameters, in case we need to resubmit at a new gas price.
-            pendingTxHash = txHash;
             pendingGasPriceGwei = tx.gasPrice;
             pendingNonce = tx.nonce;
             pendingPongData = pongData;
         })
         // When tx submitted to mempool, output to console and setup monitoring of the tx.
         .on("transactionHash", async (txHash) => {
-            console.log(txHash);
             await storage.setItem('pendingTx', txHash);
             web3.eth.getTransaction(txHash)
             .then((txData) => {
@@ -433,7 +448,6 @@ async function prepareAndSendTx(pongData, nonce) {
             // Reset the processing of the tx queue (the queue will fire for reprocessing on the next block).
             STATE_pendingTx = false;
             STATE_processingQueue = false;
-            pendingTxHash = null;
             pendingGasPriceGwei = null;
             pendingNonce = null;
             pendingPongData = null;
@@ -470,7 +484,6 @@ async function handleConfirmedTx(blockNumber) {
     // Update other variables.
     await storage.setItem('pendingTx', '');
     STATE_pendingTx = false;
-    pendingTxHash = null;
     pendingGasPriceGwei = null;
     pendingNonce = null;
     pendingPongData = null;
@@ -541,7 +554,6 @@ async function checkPreviousPendingTx() {
                 STATE_pendingTx = true;
                 STATE_processingQueue = true;
                 // Save key tx parameters, in case we need to resubmit at a new gas price.
-                pendingTxHash = priorPendingTxHash;
                 pendingGasPriceGwei = Number(web3.utils.fromWei(txData.gasPrice, "gwei"));
                 pendingNonce = txData.nonce;
                 txQueue = await storage.getItem('txQueue');
@@ -587,6 +599,7 @@ function setWorkingString(mainStr, suffixStr) {
 /***************************************************
  * @dev Condense a hash String, visually, by replacing many inner characters with '...'.
  * @param hash - the hash to be condensed (String).
+ * @returns The condensed hash String.
  */
 function condenseHashString(hash) {
     return hash.substring(0, 7) + '...' + hash.substring(hash.length - 6, hash.length - 1)
