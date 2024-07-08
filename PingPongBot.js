@@ -124,7 +124,7 @@ async function initBot() {
                 console.log(('Error receipt: ' + receipt).errorColor);
                 genericErrHandler(err,'listening to contract events');
             });
-
+    
             // Subscribe to Infura to monitor new block generation and analyze an active tx if applicable.
             // Could also use 'web3.eth.subscribe' directly, but Infura events fire in a more timely manner.
             try {
@@ -155,7 +155,6 @@ async function processLatestBlock(blockNumber) {
     let priorityFeeGwei;
     let fastPriorityFeeGwei;
     let baseFeeGwei;
-    let maxFeeGwei;
     // Get the priority fee estimate.
     axios.post(infuraEndpoint, { jsonrpc: '2.0', method: 'eth_maxPriorityFeePerGas', params: [], id: 1 })   // Results returned in WEI.
     .then((response) => {
@@ -166,7 +165,7 @@ async function processLatestBlock(blockNumber) {
         axios.post(infuraEndpoint, { jsonrpc: '2.0', method: 'eth_gasPrice', params: [], id: 1 })   // Results returned in WEI.
         .then((response) => {
             let maxFeeWei = web3.utils.hexToNumber(response.data.result, true);
-            maxFeeGwei = parseFloat(Number(web3.utils.fromWei(maxFeeWei, 'gwei')).toFixed(4));
+            let maxFeeGwei = parseFloat(Number(web3.utils.fromWei(maxFeeWei, 'gwei')).toFixed(4));
             baseFeeGwei = (maxFeeGwei - priorityFeeGwei).toFixed(4);
             safeMaxFeeGwei = Number(2 * Number(baseFeeGwei) + Number(fastPriorityFeeGwei)).toFixed(4);
             finishLatestBlockProcessing();      // This function is just a few lines below here.
@@ -174,7 +173,7 @@ async function processLatestBlock(blockNumber) {
         .catch((err) => { genericErrHandler(err,'fetching Sepolia gas price from Infura'); });
     })
     .catch((err) => { genericErrHandler(err,'fetching Sepolia max priority fee from Infura'); });
-
+    
     // Put this in a function, and call it in the code above to ensure gas estimates are complete before executing this code.
     async function finishLatestBlockProcessing() {
         // If the bot is just starting, then perform some special functions.
@@ -253,9 +252,9 @@ async function processLatestBlock(blockNumber) {
         // Store the block number as the latest block that has been checked by the bot.
         await storage.setItem('lastCheckedBlockNumber', blockNumber);
 
-        // If there is currently a pending tx, then compare its gas price with the current gas price, and resubmit the tx if the current gas price is too high.
+        // If there is currently a pending tx, then compare its gas price with the current gas price, and resubmit the tx if the current gas price exceeds 80% of the submitted price.
         if (STATE_pendingTx) {
-            if (pendingGasPriceGwei < maxFeeGwei) {
+            if (baseFeeGwei > pendingGasPriceGwei * 0.8) {
                 prepareAndSendTx(pendingPongData, pendingNonce);
             }
         // If the tx queue is not currently being processed, then initiate a check of the transaction queue for any new txs that need to be processed.
@@ -401,37 +400,47 @@ async function prepareAndSendTx(pongData, nonce) {
         }
         console.log('Tx gas price: ' + web3.utils.fromWei(tx.gasPrice, 'gwei') + ' GWEI, nonce: ' + tx.nonce);
         // Send the transaction by calling the pong() function.
-        let sentTx = web3.eth.sendSignedTransaction(signedTx.rawTransaction)
-        .catch((err) => { genericErrHandler(err,'executing "sendSignedTransaction" command', true); });
-        console.log('Waiting for transaction to arrive in mempool...');
-        // Update the pending tx flag.
-        STATE_pendingTx = true;
-        // Save key tx parameters, in case we need to resubmit at a new gas price.
-        pendingTxHash = txHash;
-        pendingGasPriceGwei = tx.gasPrice;
-        pendingNonce = tx.nonce;
-        pendingPongData = pongData;
+        web3.eth.sendSignedTransaction(signedTx.rawTransaction)
+        .on("sending", (sending) => {
+            console.log('Submitting transaction to mempool...');
+            // Update the pending tx flag.
+            STATE_pendingTx = true;
+            // Save key tx parameters, in case we need to resubmit at a new gas price.
+            pendingTxHash = txHash;
+            pendingGasPriceGwei = tx.gasPrice;
+            pendingNonce = tx.nonce;
+            pendingPongData = pongData;
+        })
         // When tx submitted to mempool, output to console and setup monitoring of the tx.
-        sentTx.on("transactionHash", async (txHash) => {
+        .on("transactionHash", async (txHash) => {
+            console.log(txHash);
             await storage.setItem('pendingTx', txHash);
             web3.eth.getTransaction(txHash)
             .then((txData) => {
                 clearInterval(workingAnimationID);
-                logUpdate('Transaction submitted to mempool\n(tx hash: ' + txHash + ')');
+                logUpdate('Transaction arrived in mempool\n(tx hash: ' + txHash + ')');
                 logUpdate.done();
                 setWorkingString('Monitoring transaction progress', '\n');
             });
         })
         // Fires upon tx confirmation.
-        sentTx.on("receipt", async (receipt) => {
+        .on("receipt", async (receipt) => {
             handleConfirmedTx(receipt.blockNumber);
         })
-        sentTx.on("error", (err) => {
+        .on("error", (err) => {
             console.log(('There was an error sending the Pong transaction.').errorColor);
-            genericErrHandler(err,'sending transaction', true);
-        });
+            genericErrHandler(err,'sending transaction');
+            // Reset the processing of the tx queue (the queue will fire for reprocessing on the next block).
+            STATE_pendingTx = false;
+            STATE_processingQueue = false;
+            pendingTxHash = null;
+            pendingGasPriceGwei = null;
+            pendingNonce = null;
+            pendingPongData = null;
+        })
+        .catch((err) => { genericErrHandler(err,'executing "sendSignedTransaction" command'); });
     } catch (err) {
-        genericErrHandler(err,'preparing the next transaction. Trying again in 3 seconds...', true);
+        genericErrHandler(err,'preparing the next transaction. Trying again in 3 seconds...');
         setTimeout(() => { prepareAndSendTx(pongData, nonce); }, 3000);     // Try again, it's unlikely to be a permanent error.
     }
 }
@@ -545,7 +554,7 @@ async function checkPreviousPendingTx() {
             if (err.code == 430) {
                 console.log('A transaction of that hash no longer exists. It must have been cancelled or replaced with a new transaction of a higher gas fee.');
             } else {
-                genericErrHandler(err,'processing a formerly pending transaction. Process aborted', false);
+                genericErrHandler(err,'processing a formerly pending transaction. Process aborted');
                 console.log(('There was an error trying to find information about this transaction. It will be ignored by the bot.').errorColor);
             }
             await storage.setItem('pendingTx', '');
