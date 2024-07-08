@@ -261,7 +261,7 @@ async function processLatestBlock(blockNumber) {
         // If the tx queue is not currently being processed, then initiate a check of the transaction queue for any new txs that need to be processed.
         } else if (!STATE_processingQueue) {
             // Only output block number and gas fee if we are not monitoring a pending tx and we're using an updateable console.
-            if (DEPLOYMENT_TYPE = 'Updateable') {
+            if (DEPLOYMENT_TYPE == 'Updateable') {
                 clearInterval(workingAnimationID);
                 setWorkingString('\nLatest block number ' + blockNumber + ', Safe max gas fee: ' + safeMaxFeeGwei + ' GWEI ', '\n');
             }
