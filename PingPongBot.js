@@ -6,6 +6,12 @@
 
 
 /***************************************************
+ * @dev Bot settings to be configured by the user.
+ */
+const DEPLOYMENT_TYPE = 'Not-Updateable';   // Either 'Updateable' or 'Not-Updateable', depending on whether the console can handle same-line updates.
+
+
+/***************************************************
  * @dev Import/Require necessary packages.
  */
 // These lines make "require" available even though this file is of "type": "module".
@@ -118,7 +124,7 @@ async function initBot() {
                 console.log(('Error receipt: ' + receipt).errorColor);
                 genericErrHandler(err,'listening to contract events');
             });
-    
+
             // Subscribe to Infura to monitor new block generation and analyze an active tx if applicable.
             // Could also use 'web3.eth.subscribe' directly, but Infura events fire in a more timely manner.
             try {
@@ -168,7 +174,7 @@ async function processLatestBlock(blockNumber) {
         .catch((err) => { genericErrHandler(err,'fetching Sepolia gas price from Infura'); });
     })
     .catch((err) => { genericErrHandler(err,'fetching Sepolia max priority fee from Infura'); });
-    
+
     // Put this in a function, and call it in the code above to ensure gas estimates are complete before executing this code.
     async function finishLatestBlockProcessing() {
         // If the bot is just starting, then perform some special functions.
@@ -252,12 +258,13 @@ async function processLatestBlock(blockNumber) {
             if (pendingGasPriceGwei < maxFeeGwei) {
                 prepareAndSendTx(pendingPongData, pendingNonce);
             }
-        // If there are no pending transactions, then check the transaction queue for any new txs that need to be processed.
-        // If the tx queue is not currently being processed, then initiate that.
+        // If the tx queue is not currently being processed, then initiate a check of the transaction queue for any new txs that need to be processed.
         } else if (!STATE_processingQueue) {
-            // Only output block number and gas fee if we are not monitoring a pending tx.
-            clearInterval(workingAnimationID);
-            setWorkingString('\nLatest block number ' + blockNumber + ', Safe max gas fee: ' + safeMaxFeeGwei + ' GWEI ', '\n');
+            // Only output block number and gas fee if we are not monitoring a pending tx and we're using an updateable console.
+            if (DEPLOYMENT_TYPE = 'Updateable') {
+                clearInterval(workingAnimationID);
+                setWorkingString('\nLatest block number ' + blockNumber + ', Safe max gas fee: ' + safeMaxFeeGwei + ' GWEI ', '\n');
+            }
             // Consider whether the tx queue needs processing.
             countAndExecuteTxQueue(false);
         }
@@ -270,10 +277,11 @@ async function processLatestBlock(blockNumber) {
  * @param event - the event object that came with the fired event.
  */
 async function handlePingEvent(event) {
-    // Do not process this while a transaction is underway. Wait until it is finished.
+    /*// Do not process this while a transaction is underway. Wait until it is finished.
+    // This is just so the console updates in the correct order. The bot will work fine even if the ping event is handled immediately.
     if (STATE_pendingTx) {
         setTimeout(() => { handlePingEvent(event); }, 1000);
-    } else {
+    } else {*/
         clearInterval(workingAnimationID);
         logUpdate(('\n' + new Date(Date.now()).toUTCString()).eventColor);
         logUpdate.done();
@@ -282,7 +290,7 @@ async function handlePingEvent(event) {
         console.log(('A Pong response has been added to transaction queue.').eventColor);
         // If the tx queue is not currently being processed, then initiate that.
         if (!STATE_processingQueue) countAndExecuteTxQueue(true);
-    }
+    //}
 }
 
 
@@ -338,7 +346,7 @@ async function countAndExecuteTxQueue(showOutput) {
  * @dev Process queued transactions.
  */
 async function processTxQueue() {
-    // Check if there is a currently pending tx.
+    // If there is not a currently pending tx.
     if (!STATE_pendingTx) {
         // There is no pending tx, so get the next tx in the queue.
         txQueue = await storage.getItem('txQueue');
@@ -351,11 +359,11 @@ async function processTxQueue() {
             }
             // Get the next Ping tx hash in the queue.
             let queueArray = txQueue.split('@');
-            let nextPingHash = queueArray[0];
+            let pingHashToSend = queueArray[0];
             // Setup a new Pong transaction with this hash as the data.
             let nonce = await web3.eth.getTransactionCount(accountAddress);
             // Issue a transaction that calls the 'pong' method.
-            prepareAndSendTx(nextPingHash, nonce);
+            prepareAndSendTx(pingHashToSend, nonce);
         }
     }
 }
@@ -392,17 +400,19 @@ async function prepareAndSendTx(pongData, nonce) {
             console.log(('Sending new Pong response transaction').actionColor + ' (Ping tx hash: ' + condenseHashString(pongData) + ')');
         }
         console.log('Tx gas price: ' + web3.utils.fromWei(tx.gasPrice, 'gwei') + ' GWEI, nonce: ' + tx.nonce);
-        setWorkingString('Monitoring transaction progress', '\n');
         // Send the transaction by calling the pong() function.
-        web3.eth.sendSignedTransaction(signedTx.rawTransaction)
+        let sentTx = web3.eth.sendSignedTransaction(signedTx.rawTransaction)
+        .catch((err) => { genericErrHandler(err,'executing "sendSignedTransaction" command', true); });
+        console.log('Waiting for transaction to arrive in mempool...');
+        // Update the pending tx flag.
+        STATE_pendingTx = true;
+        // Save key tx parameters, in case we need to resubmit at a new gas price.
+        pendingTxHash = txHash;
+        pendingGasPriceGwei = tx.gasPrice;
+        pendingNonce = tx.nonce;
+        pendingPongData = pongData;
         // When tx submitted to mempool, output to console and setup monitoring of the tx.
-        .on("transactionHash", async (txHash) => {
-            STATE_pendingTx = true;
-            // Save key tx parameters, in case we need to resubmit at a new gas price.
-            pendingTxHash = txHash;
-            pendingGasPriceGwei = tx.gasPrice;
-            pendingNonce = tx.nonce;
-            pendingPongData = pongData;
+        sentTx.on("transactionHash", async (txHash) => {
             await storage.setItem('pendingTx', txHash);
             web3.eth.getTransaction(txHash)
             .then((txData) => {
@@ -413,17 +423,16 @@ async function prepareAndSendTx(pongData, nonce) {
             });
         })
         // Fires upon tx confirmation.
-        .on("receipt", async (receipt) => {
+        sentTx.on("receipt", async (receipt) => {
             handleConfirmedTx(receipt.blockNumber);
         })
-        .on("error", (err) => {
+        sentTx.on("error", (err) => {
             console.log(('There was an error sending the Pong transaction.').errorColor);
             genericErrHandler(err,'sending transaction', true);
-        })
-        .catch((err) => { genericErrHandler(err,'sending transaction', true); });
+        });
     } catch (err) {
-        genericErrHandler(err,'preparing and sending the next transaction', true);
-        setTimeout(() => { prepareAndSendTx(pongData, nonce); }, 1000);     // Try again, it's unlikely to be a permanent error.
+        genericErrHandler(err,'preparing the next transaction. Trying again in 3 seconds...', true);
+        setTimeout(() => { prepareAndSendTx(pongData, nonce); }, 3000);     // Try again, it's unlikely to be a permanent error.
     }
 }
 
@@ -457,7 +466,7 @@ async function handleConfirmedTx(blockNumber) {
     pendingNonce = null;
     pendingPongData = null;
     // Check the tx queue again for any more txs to process.
-    // Wait a moment before executing, however, to give time for any Ping events waiting to be added to queue can do so.
+    // Wait a moment before executing, however, to give time so any Ping events waiting to be added to queue can do so.
     setTimeout(() => { countAndExecuteTxQueue(true); }, 2000);
 }
 
@@ -554,9 +563,15 @@ async function checkPreviousPendingTx() {
  * @param suffixStr - anything to go after the animated portion (such as a new blank line) (String).
  */
 function setWorkingString(mainStr, suffixStr) {
-    workingAnimationID = setInterval(() => {
-        logUpdate(mainStr + workingFrames[workingIndex = ++workingIndex % workingFrames.length] + suffixStr);
-    }, 150);
+    // Use this when working with a deployment that DOES accommodate line updates in the output console/log.
+    if (DEPLOYMENT_TYPE == 'Updateable') {
+        workingAnimationID = setInterval(() => {
+            logUpdate(mainStr + workingFrames[workingIndex = ++workingIndex % workingFrames.length] + suffixStr);
+        }, 150);
+    // Use this when working with a deployment that does NOT accommodate line updates in the output console/log.
+    } else if (DEPLOYMENT_TYPE == 'Not-Updateable') {
+        console.log(mainStr + suffixStr);
+    }
 }
 
 
