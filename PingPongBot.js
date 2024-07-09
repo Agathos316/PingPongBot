@@ -72,6 +72,7 @@ const contractABI = [{"inputs":[],"stateMutability":"nonpayable","type":"constru
 const accountAddress = process.env.ACC_ADDRESS;
 const privateKey = '0x' + process.env.PRIVATE_KEY;
 const signer = web3.eth.accounts.privateKeyToAccount(privateKey);   // Create a signing account from a private key.
+const startManualStatusCheckAfterNumBlocks = 15;    // The number of blocks after which the bot will start manually checking the status of a still-pending tx.
 const workingFrames = ['>    ', '_>   ', '__>  ', '___> ', '____>', '_____>', '______>', '______<', '_____< ',  '____< ', '___< ', '__<  ', '_<   ', '<    '];
 colors.setTheme({
     actionColor: 'green',  
@@ -279,8 +280,8 @@ async function processLatestBlock(blockNumber) {
 
         // If there is currently a pending tx.
         if (STATE_pendingTx) {
-            // If the tx has been pending for more than 20 blocks, manually check its status, as we may have missed the 'on("receipt")' event due to network faults.
-            if ((latestBlockNumber - pendingTxStartBlock) > 20) {
+            // If the tx has been pending for more than 'x' blocks, start manually checking its status, as we may have missed the 'on("receipt")' event due to network faults.
+            if ((latestBlockNumber - pendingTxStartBlock) > startManualStatusCheckAfterNumBlocks) {
                 if (!manualCheckNoticeShown) {
                     clearInterval(workingAnimationID);
                     logUpdate('Transaction appears to be pending for a long time.\nWill manually check tx status in case the bot missed a confirmation event.');
@@ -299,14 +300,14 @@ async function processLatestBlock(blockNumber) {
                 }
             }
             
-        // If the tx queue is not currently being processed, then initiate a check of the transaction queue for any new txs that need to be processed.
+        // If the tx queue is not currently being processed, then assess the state of the transaction queue.
         } else if (!STATE_processingQueue) {
-            // If we are not processing the tx queue, then only output here if we're using an updateable console, or the block number is divisible by 100 (i.e. output every hundredth block if not a same-line updateable console).
+            // Only output here if we're using an updateable console, or the block number is divisible by 100 (i.e. output every hundredth block if not a same-line updateable console).
             if (DEPLOYMENT_TYPE == 'Updateable' || blockNumber % 100 == 0) {
                 clearInterval(workingAnimationID);
                 setWorkingString('\nLatest block number ' + blockNumber + ', Safe max gas fee: ' + safeMaxFeeGwei + ' GWEI ', '\n');
             }
-            // Consider whether the tx queue needs processing.
+            // Assess whether the tx queue needs processing.
             countAndExecuteTxQueue(false);
         }
     }
@@ -442,6 +443,7 @@ async function prepareAndSendTx(pongData, nonce) {
         }
         console.log('Tx gas price: ' + web3.utils.fromWei(tx.gasPrice, 'gwei') + ' GWEI, nonce: ' + tx.nonce);
         // Send the transaction by calling the pong() function.
+        manualCheckNoticeShown = false;
         web3.eth.sendSignedTransaction(signedTx.rawTransaction)
         .on("sending", (sending) => {
             console.log('Submitting transaction to mempool...');
@@ -527,7 +529,6 @@ async function handleConfirmedTx(blockNumber) {
     pendingNonce = null;
     pendingPongData = null;
     pendingTxStartBlock = null;
-    manualCheckNoticeShown = false;
     // In case we're in the middle of manually checking this transaction, only reset the 'STATE_handlingConfirmedTx' flag when the manual check has finished.
     // This is to ensure that the current function 'handleConfirmedTx()' is not accidentally called a second time by the manual tx status checking function, potentially nullifying a newer tx that is not yet confirmed. It is unlikely, but must be managed.
     while (STATE_handlingConfirmedTx) {
@@ -585,7 +586,7 @@ async function checkForMissedBlocks(fromBlock, toBlock) {
  */
 async function manuallyCheckPendingTx(isFirstRun) {
     STATE_manualCheckInProgress = true;     // Signal that we're starting a manual check of the tx status.
-    // Check if there was a pending tx when the previous instance of the bot was stopped.
+    // Get a prior pending tx hash, if it exists.
     let priorPendingTxHash = await storage.getItem('pendingTx');
     if (priorPendingTxHash != '') {
         if (isFirstRun) {
@@ -597,11 +598,11 @@ async function manuallyCheckPendingTx(isFirstRun) {
         .then(async (txData) => {
             // If the tx has been mined.
             if (txData.blockNumber != null) {
-                // Check that another function has not already called the bot to handle this confirmed tx.
-                // This check is only necessary when we are managed a long-time pending tx that was initiated by this bot instance.
+                // Check that another function has not currently called the bot to handle this confirmed tx.
+                // This check is only necessary when we are managing a long-time pending tx that was initiated by this bot instance, such that both auto and manual status confirmations are operating.
                 // This chech is not relevant when checking a tx left pending from a previous bot instance.
                 if (!STATE_handlingConfirmedTx) {
-                    STATE_handlingConfirmedTx = true;
+                    STATE_handlingConfirmedTx = true;           // Flag that we are now initiating handling of the tx confirmation.
                     STATE_manualCheckInProgress = false;        // Manual check has finished. We are now confirming the tx.
                     await handleConfirmedTx(txData.blockNumber);
                     return true;
