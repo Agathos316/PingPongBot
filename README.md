@@ -22,12 +22,13 @@ A bot to respond to ping events with calls to the pong method, of smart contract
 ### Safe-Restart
 The transaction queue, current block number, and any pending transaction hash are written to storage in real-time, to ensure that if the bot stops, it can restart with all the necessary information to perform the full initialization described above.
 
-### Network Outage Handling and Rate-Limiting Prevention
-* At each new block, the bot checks whether any blocks were missed by checking for contiguous block numbers. If blocks were missed, the missed blocks are searched for ping events. Missed ping events are added to the transaction queue. This is a fail-safe in case of downtime or rate-limiting in the Infura block listener.
+### Rate-Limiting Prevention and Network Outage Handling
 * Infura is queried for gas price estimates only every new block. Keeping such queries to only occur with each new block help guards against being rate limited by Infura.
 * If gas price queries are rate limited, or fail for any reason, processing of new transactions pauses until gas price estimates resume.
-* Querying missed blocks is done through the Web3 Ethereum API to avoid adding to Infura traffic, thus lowering the risk of being rate-limited by Infura.
+* At each new block, the bot checks whether any blocks were missed by checking for contiguous block numbers. If blocks were missed, the missed blocks are searched for ping events. Missed ping events will have their pong responses added to the transaction queue. This is a fail-safe mechanism in case of downtime or rate-limiting in the Infura block listener.
+* Querying missed blocks is done through the Web3 Ethereum API to avoid adding more bot traffic to the Infura node, thus lowering the risk of being rate-limited by Infura.
 * The future transaction queue remains unchanged until a transaction is executed and confirmed. If there is a network outage causing a transaction submission to fail, the transaction queue remains unchanged, and the bot will simply try again, or successfully execute the transaction when the bot restarts.
+* In the case of a network outage, the bot may have submitted a transaction but not receive notification that it has been mined. If a transaction appears to be pending for a long time (15 or more blocks), the bot will begin probing the transaction status with each new block. In this way, a confirmed transaction is sure to be found, even if the bot does not receive the confirmation event associated with the `sendSignedTransaction()` method.
 
 ### Transaction Error Management
 * The bot does not allow a new transaction to proceed until the previous transaction has been mined. This helps guard against conflicting nonces, or transactions being frozen in the mempool by prior unmined transactions. This also applies to when there is a new instance of the bot (i.e. whenever it is restarted after a failure). As explained in __*Initialization*__ above, the bot first checks for a still-pending transaction from an earlier instance of the bot. If there is a still-pending transaction, the bot will continue to listen for new blocks and ping events but will not execute any further transactions until the pending transaction is confirmed.
