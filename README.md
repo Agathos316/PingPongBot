@@ -20,7 +20,7 @@ A bot to respond to ping events with calls to the pong method, of smart contract
 
 ## Error Management
 ### Safe-Restart
-The transaction queue, current block number, and any pending transaction hash are written to storage in real-time, to ensure that if the bot stops, it can restart with all the necessary information to perform the full initialization described above. The only situation where a restart would result in unpredictable behaviour is if the bot stops within the narrow window between a transaction being submitted by the bot and a transaction hash being provided by the mempool. Tracking a transaction before a hash has been provided is a complex task, and beyond the scope of this bot. However, the time window of concern is typically extremely short and presents little risk.
+The transaction queue, current block number, and any pending transaction hash are written to storage in real-time, to ensure that if the bot stops, it can restart with all the necessary information to perform the full initialization described above.
 
 ### Network Outage Handling and Rate-Limiting Prevention
 * At each new block, the bot checks whether any blocks were missed by checking for contiguous block numbers. If blocks were missed, the missed blocks are searched for ping events. Missed ping events are added to the transaction queue. This is a fail-safe in case of downtime or rate-limiting in the Infura block listener.
