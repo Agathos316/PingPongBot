@@ -453,7 +453,10 @@ async function prepareAndSendTx(pongData, nonce) {
             pendingNonce = null;
             pendingPongData = null;
         })
-        .catch((err) => { genericErrHandler(err,'executing "sendSignedTransaction" command'); });
+        .catch((err) => {
+            genericErrHandler(err,'executing "sendSignedTransaction" command. Trying again in 3 seconds...');
+            setTimeout(() => { prepareAndSendTx(pongData, nonce); }, 3000);     // Try again, it's unlikely to be a permanent error.
+        });
     } catch (err) {
         genericErrHandler(err,'preparing the next transaction. Trying again in 3 seconds...');
         setTimeout(() => { prepareAndSendTx(pongData, nonce); }, 3000);     // Try again, it's unlikely to be a permanent error.
