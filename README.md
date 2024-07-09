@@ -37,5 +37,5 @@ As described in __*Protocol*__ above, checks are made for contiguous block numbe
 
 ### Duplicate Pong Prevention
 * Duplicate pong responses are avoided by implementing a strict transaction queue, allowing only one transaction pending at a time. Only failed or stuck transactions are resubmitted (with the same nonce to prevent duplicate pongs), else no further transacting occurs until the pending transaction is confirmed.
-* The transaction queue is immediately updated upon transaction confirmation, helping ensure that no transaction is processed twice.
+* The transaction queue is immediately updated upon transaction confirmation, helping ensure that no transaction in the queue is processed twice.
 * Every time the transaction queue changes, or a new transaction is pending, this information is immediately written to local storage to prevent the bot submitting duplicate pongs if it stops and restarts.
