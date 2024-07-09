@@ -31,13 +31,17 @@ import logUpdate from 'log-update';
  * Global variables
  */
 // Variables.
+let latestBlockNumber;
 let web3_InfuraWS;
 let contract;
 let addressBotIsRunningWith;
 let txQueue;
-let pendingGasPriceGwei;
-let pendingNonce;
-let pendingPongData;
+let pendingTxHash = null;
+let pendingGasPriceGwei = null;
+let pendingNonce = null;
+let pendingPongData = null;
+let pendingTxStartBlock = null;
+let manualCheckNoticeShown = false;
 let safeMaxFeeGwei;
 let firstLoadBlockNumber;
 let workingIndex = 0;
@@ -46,6 +50,8 @@ let workingAnimationID;
 let BOT_STARTING = true;
 let STATE_pendingTx = false;
 let STATE_processingQueue = false;
+let STATE_manualCheckInProgress = false;
+let STATE_handlingConfirmedTx = false;
 /* Persistent storage items to be managed:
     - addressBotIsRunningWith: the account address the bot is or was running with last.
     - firstLoadBlockNumber: the block number when the bot first started using the current account address.
@@ -163,6 +169,7 @@ async function initBot() {
  * @param blockNumber - the lastest block number (Number).
  */
 async function processLatestBlock(blockNumber) {
+    latestBlockNumber = blockNumber;
     // Update gas price estimates first, in case a tx is needed soon.
     let priorityFeeGwei;
     let fastPriorityFeeGwei;
@@ -234,8 +241,8 @@ async function processLatestBlock(blockNumber) {
                 console.log('Bot ended previous session at block number ' + fromBlock + '.');
                 console.log('Current bot session starting at block number ' + blockNumber + '.');
 
-                // Check for a pending tx from a previous bot session.
-                await checkPreviousPendingTx()
+                // Check for a pending tx from a previous bot session, and handle the outcome.
+                await manuallyCheckPendingTx(true)
                 .then(async () => {
                     // Check in between sessions for any missed Ping events.
                     fromBlock = Number(fromBlock) + 1;      // Search is inclusive of this block number itself.
@@ -270,11 +277,28 @@ async function processLatestBlock(blockNumber) {
         // Store the block number as the latest block that has been checked by the bot.
         await storage.setItem('lastCheckedBlockNumber', blockNumber);
 
-        // If there is currently a pending tx, then compare its gas price with the current gas price, and resubmit the tx if the current gas price exceeds 80% of the submitted price.
+        // If there is currently a pending tx.
         if (STATE_pendingTx) {
-            if (baseFeeGwei != undefined && pendingGasPriceGwei != '' && baseFeeGwei > pendingGasPriceGwei * 0.8) {
-                prepareAndSendTx(pendingPongData, pendingNonce);
+            // If the tx has been pending for more than 20 blocks, manually check its status, as we may have missed the 'on("receipt")' event due to network faults.
+            if ((latestBlockNumber - pendingTxStartBlock) > 20) {
+                if (!manualCheckNoticeShown) {
+                    clearInterval(workingAnimationID);
+                    logUpdate('Transaction appears to be pending for a long time.\nWill manually check tx status in case the bot missed a confirmation event.');
+                    logUpdate.done();
+                    manualCheckNoticeShown = true;
+                }
+                let txConfirmed = await manuallyCheckPendingTx(false);
+                // Compare its gas price with the current gas price, and resubmit the tx if the current gas price exceeds 80% of the submitted price.
+                if (!txConfirmed && baseFeeGwei != undefined && pendingGasPriceGwei != '' && baseFeeGwei > pendingGasPriceGwei * 0.8) {
+                    prepareAndSendTx(pendingPongData, pendingNonce);
+                }
+            } else {
+                // Compare its gas price with the current gas price, and resubmit the tx if the current gas price exceeds 80% of the submitted price.
+                if (baseFeeGwei != undefined && pendingGasPriceGwei != '' && baseFeeGwei > pendingGasPriceGwei * 0.8) {
+                    prepareAndSendTx(pendingPongData, pendingNonce);
+                }
             }
+            
         // If the tx queue is not currently being processed, then initiate a check of the transaction queue for any new txs that need to be processed.
         } else if (!STATE_processingQueue) {
             // If we are not processing the tx queue, then only output here if we're using an updateable console, or the block number is divisible by 100 (i.e. output every hundredth block if not a same-line updateable console).
@@ -430,32 +454,46 @@ async function prepareAndSendTx(pongData, nonce) {
         })
         // When tx submitted to mempool, output to console and setup monitoring of the tx.
         .on("transactionHash", async (txHash) => {
-            await storage.setItem('pendingTx', txHash);
-            web3.eth.getTransaction(txHash)
-            .then((txData) => {
-                clearInterval(workingAnimationID);
-                logUpdate('Transaction arrived in mempool\n(tx hash: ' + txHash + ')');
-                logUpdate.done();
-                setWorkingString('Monitoring transaction progress', '\n');
-            });
+            await storage.setItem('pendingTx', txHash); // This should come first in case of errors executing the code below.
+            pendingTxHash = txHash;
+            pendingTxStartBlock = latestBlockNumber;     // Start counting how many blocks the tx is pending for. If there are too many, we will start to manually check the tx status.
+            clearInterval(workingAnimationID);
+            logUpdate('Transaction arrived in mempool\n(tx hash: ' + txHash + ')');
+            logUpdate.done();
+            setWorkingString('Monitoring transaction progress', '\n');
         })
         // Fires upon tx confirmation.
         .on("receipt", async (receipt) => {
-            handleConfirmedTx(receipt.blockNumber);
+            // Check this first: ensure that this is not an old event (due to network error) relating to a prior tx that has already been confirmed by the bot via another route. Extremely unlikely, but must be managed.
+            if (receipt.transactionHash == pendingTxHash) {
+                // Then check this: ensure that another function has not already called the bot to handle this confirmed tx.
+                if (!STATE_handlingConfirmedTx) {
+                    STATE_handlingConfirmedTx = true;
+                    handleConfirmedTx(receipt.blockNumber);
+                }
+            }
         })
         .on("error", (err) => {
-            console.log(('There was an error sending the Pong transaction.').errorColor);
-            genericErrHandler(err,'sending transaction');
-            // Reset the processing of the tx queue (the queue will fire for reprocessing on the next block).
+            console.log(('The network gave an error regarding this transaction.').errorColor);
+            genericErrHandler(err,'from network with transaction');
+            // Reset the processing of the tx queue to try again (the queue will fire for reprocessing on the next block).
             STATE_pendingTx = false;
             STATE_processingQueue = false;
+            pendingTxHash = null;
             pendingGasPriceGwei = null;
             pendingNonce = null;
             pendingPongData = null;
+            pendingTxStartBlock = null;
         })
         .catch((err) => {
-            genericErrHandler(err,'executing "sendSignedTransaction" command. Trying again in 3 seconds...');
-            setTimeout(() => { prepareAndSendTx(pongData, nonce); }, 3000);     // Try again, it's unlikely to be a permanent error.
+            genericErrHandler(err,'executing "sendSignedTransaction" command or fulfilling one of its event listeners.');
+            // If a tx is not yet pending, then try again from 'processTxQueue()'.
+            if (!STATE_pendingTx) {
+                console.log('Trying again in 3 seconds...');
+                setTimeout(() => { processTxQueue(); }, 3000);     // Try again, it's unlikely to be a permanent error.
+            }
+            // There should be no error different to this, once the code is tested, for the code after a tx is pending is just simple variable assignments and console outputs.
+            // If there is an error and a tx is pending, the error must be from the network, and it will be caught by '.on("error")'.
         });
     } catch (err) {
         genericErrHandler(err,'preparing the next transaction. Trying again in 3 seconds...');
@@ -473,27 +511,31 @@ async function handleConfirmedTx(blockNumber) {
     clearInterval(workingAnimationID);
     logUpdate(('Transaction confirmed at block number ' + blockNumber + '.').infoColor);
     logUpdate.done();
-    // Update the tx queue.
+    // Update the tx queue by finding and removing the confirmed tx's ping hash.
     txQueue = await storage.getItem('txQueue');
-    // If there are multiple txs in the queue, then remove just the first one.
-    if (txQueue.indexOf('@') >= 0) {
-        let queueArray = txQueue.split('@');
-        queueArray.shift();     // Removes first element from array.
-        txQueue = queueArray.join('@');
-    // If there is only one tx in the queue, then set the queue to be an empty String.
+    if (txQueue.indexOf(pendingPongData + '@') >= 0) {
+        txQueue = txQueue.replace(pendingPongData + '@', '');
     } else {
-        txQueue = '';
+        txQueue = txQueue.replace(pendingPongData, '');
     }
     await storage.setItem('txQueue', txQueue);
     // Update other variables.
     await storage.setItem('pendingTx', '');
     STATE_pendingTx = false;
+    pendingTxHash = null;
     pendingGasPriceGwei = null;
     pendingNonce = null;
     pendingPongData = null;
+    pendingTxStartBlock = null;
+    manualCheckNoticeShown = false;
+    // In case we're in the middle of manually checking this transaction, only reset the 'STATE_handlingConfirmedTx' flag when the manual check has finished.
+    // This is to ensure that the current function 'handleConfirmedTx()' is not accidentally called a second time by the manual tx status checking function, potentially nullifying a newer tx that is not yet confirmed. It is unlikely, but must be managed.
+    while (STATE_handlingConfirmedTx) {
+        STATE_handlingConfirmedTx = STATE_manualCheckInProgress;
+    }
     // Check the tx queue again for any more txs to process.
     // Wait a moment before executing, however, to give time so any Ping events waiting to be added to queue can do so.
-    setTimeout(() => { countAndExecuteTxQueue(true); }, 2000);
+    setTimeout(() => { countAndExecuteTxQueue(true); }, 3000);
 }
 
 
@@ -537,48 +579,76 @@ async function checkForMissedBlocks(fromBlock, toBlock) {
 
 
 /***************************************************
- * @dev Check whether a previous instance of the bot left a transaction pending.
- *      Determine whether it is currently pending or confirmed, and respond appropriately.
+ * @dev Manually check whether a transaction that was left pending has been confirmed, and respond appropriately.
+ * @param FirstRun - TRUE if the bot is just starting a new instance, processing its first block. FALSE otherwise. (Boolean)
+ * @returns true/false (Boolean) - has the tx been confirmed?
  */
-async function checkPreviousPendingTx() {
+async function manuallyCheckPendingTx(isFirstRun) {
+    STATE_manualCheckInProgress = true;     // Signal that we're starting a manual check of the tx status.
     // Check if there was a pending tx when the previous instance of the bot was stopped.
     let priorPendingTxHash = await storage.getItem('pendingTx');
     if (priorPendingTxHash != '') {
-        console.log(('\nA transaction was left pending at the end of a previous bot session.').infoColor);
-        console.log('Checking status of potentially pending transaction of hash: ' + priorPendingTxHash);
+        if (isFirstRun) {
+            console.log(('\nA transaction was left pending at the end of a previous bot session.').infoColor);
+            console.log('Checking status of potentially pending transaction of hash: ' + priorPendingTxHash);
+        }
         // Check whether the tx is now confirmed.
         web3.eth.getTransaction(priorPendingTxHash)
         .then(async (txData) => {
             // If the tx has been mined.
             if (txData.blockNumber != null) {
-                await handleConfirmedTx(txData.blockNumber);
+                // Check that another function has not already called the bot to handle this confirmed tx.
+                // This check is only necessary when we are managed a long-time pending tx that was initiated by this bot instance.
+                // This chech is not relevant when checking a tx left pending from a previous bot instance.
+                if (!STATE_handlingConfirmedTx) {
+                    STATE_handlingConfirmedTx = true;
+                    STATE_manualCheckInProgress = false;        // Manual check has finished. We are now confirming the tx.
+                    await handleConfirmedTx(txData.blockNumber);
+                    return true;
+                }
             // Else it is still pending.
             } else {
-                console.log('Transaction is still pending.');
-                STATE_pendingTx = true;
-                STATE_processingQueue = true;
-                // Save key tx parameters, in case we need to resubmit at a new gas price.
-                pendingGasPriceGwei = Number(web3.utils.fromWei(txData.gasPrice, "gwei"));
-                pendingNonce = txData.nonce;
-                txQueue = await storage.getItem('txQueue');
-                let queueArray = txQueue.split('@');
-                pendingPongData = queueArray[0];
-                console.log(('Transaction is still pending. Bot is onto it...').actionColor);
+                // Only perform the following if we are doing this function once upon bot start.
+                // If we are here because there was a failure monitoring a tx that we just submitted, then do nothing, simply wait for the next block and check again.
+                if (isFirstRun) {
+                    console.log('Transaction is still pending.');
+                    STATE_pendingTx = true;
+                    STATE_processingQueue = true;
+                    // Save key tx parameters, in case we need to resubmit at a new gas price.
+                    pendingGasPriceGwei = Number(web3.utils.fromWei(txData.gasPrice, "gwei"));
+                    pendingNonce = txData.nonce;
+                    txQueue = await storage.getItem('txQueue');
+                    let queueArray = txQueue.split('@');
+                    pendingPongData = queueArray[0];
+                    console.log(('Transaction is still pending. Bot is onto it...').actionColor);
+                }
             }
         })
         .catch(async (err) => {
             if (err.code == 430) {
+                // The code should never get here if it's not the first run.
                 console.log('A transaction of that hash no longer exists. It must have been cancelled or replaced with a new transaction of a higher gas fee.');
+                if (!isFirstRun) {
+                    // It's unknown how we would get here, but just in case...
+                    console.log(('Please restart the bot.').errorColor);
+                }
             } else {
-                genericErrHandler(err,'processing a formerly pending transaction. Process aborted');
-                console.log(('There was an error trying to find information about this transaction. It will be ignored by the bot.').errorColor);
+                if (isFirstRun) {
+                    genericErrHandler(err,'processing a formerly pending transaction. Process aborted');
+                    console.log(('There was an error trying to find information about this transaction. It will be ignored by the bot.').errorColor);
+                }
             }
-            await storage.setItem('pendingTx', '');
+            // If we're on the first run, then  reset the 'pendingTx' storage item.
+            if (isFirstRun) await storage.setItem('pendingTx', '');
+            // If we're not on the first run, then the error is a network error, so ignore it and try again on the next block.
         });
     // No previously pending tx found.
     } else {
+        // We can only be here if we're on the first run, so conclude there was no pending tx from a prior bot session.
         console.log(('\nNo pending transaction found from a previous bot session.').infoColor);
     }
+    STATE_manualCheckInProgress = false;
+    return false;
 }
 
 
