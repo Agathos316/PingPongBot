@@ -1,5 +1,5 @@
 # Ping Pong Bot: Explainer document
-A bot to respond to ping events with calls to the pong method, of smart contract 0xA7F42ff7433cB268dD7D59be62b00c30dEd28d3D (Sepolia)
+A bot to respond to ping events with calls to the pong method, of smart contract [0xA7F42ff7433cB268dD7D59be62b00c30dEd28d3D](https://sepolia.etherscan.io/txs?a=0xa7f42ff7433cb268dd7d59be62b00c30ded28d3d) (Sepolia)
 
 ## Initialization
 * Upon start, the bot immediately listens for Ping events and for new block headers.
