@@ -9,7 +9,7 @@
  * @dev Bot settings to be configured by the user.
  */
 const DEPLOYMENT_TYPE = 'Updateable';   // Either 'Updateable' or 'Not-Updateable', depending on whether the console can handle same-line updates.
-const mockupFromBlock = '6269090';     // Set this to do a mock start a the designed block number.
+const mockupFromBlock = '';     // Set this to do a mock start a the designed block number.
 
 
 /***************************************************
