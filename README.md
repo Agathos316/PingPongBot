@@ -1,8 +1,8 @@
 # Ping Pong Bot: Explainer document
-A bot to respond to ping events with calls to the pong method, of smart contract [0xA7F42ff7433cB268dD7D59be62b00c30dEd28d3D](https://sepolia.etherscan.io/txs?a=0xa7f42ff7433cb268dd7d59be62b00c30ded28d3d) (Sepolia)
+A bot to respond to ping events with calls to the pong method of the PingPong smart contract at [0xA7F42ff7433cB268dD7D59be62b00c30dEd28d3D](https://sepolia.etherscan.io/txs?a=0xa7f42ff7433cb268dd7d59be62b00c30ded28d3d) (Sepolia)
 
 ## Initialization
-* Upon start, the bot immediately listens for Ping events and for new block headers.
+* Upon starting, the bot immediately listens for Ping events and for new block headers.
 * The bot checks whether the current bot instance with the given account address is the first time the bot has run on that account.
 * If the bot has previously run on the given account:
   * The bot checks for any pending transaction left after the previous bot instance ended, and proceeds to manage this transaction until confirmed.
