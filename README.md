@@ -13,10 +13,10 @@ A bot to respond to ping events with calls to the pong method, of smart contract
 * The bot listens for new block headers and updates the estimated maximum gas price every block.
 * The bot adds ping event hashes to a single transaction queue.
 * The bot processes one transaction from the queue at a time to avoid conflicts or duplicate submissions:
-  * The gas price is set using the formula: $2$ $\times$ *Base Fee* $+$ *Aggresive Priority Fee*. This ensures the transaction remains marketable for at least six consecutive blocks that are 100% full (see [this article](https://www.blocknative.com/blog/eip-1559-fees#3)).
+  * Gas prices for new transactions are set using the formula: $2$ $\times$ *Base Fee* $+$ *Aggresive Priority Fee*. This ensures transactions remain marketable for at least six consecutive blocks that are 100% full (see [this article](https://www.blocknative.com/blog/eip-1559-fees#3)).
   * A pending transaction is monitored until it is confirmed.
   * A transaction is removed from the transaction queue only once it is confirmed.
-  * Network gas prices continue to be updated every block. If network gas prices increase too much, preventing a transaction from being mined, the bot resubmits the transaction at a higher gas price (using the same nonce as the original pending transaction).
+  * Network gas prices continue to be updated every block. If network gas prices increase too much, preventing a transaction from being mined, the bot resubmits the transaction at an updated gas price using the formula above (and using the same nonce as the original pending transaction).
 
 ## Error Management
 ### Safe-Restart
