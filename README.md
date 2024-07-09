@@ -11,8 +11,8 @@ A bot to respond to ping events with calls to the pong method, of smart contract
 
 ## Protocol
 * The bot listens for new block headers and updates the estimated maximum gas price every block.
-* The bot adds ping event hashes to a single transaction queue.
-* The bot processes one transaction from the queue at a time to avoid conflicts or duplicate submissions:
+* The bot adds ping event hashes to a single future transaction queue.
+* The bot processes one transaction from the queue at a time, waiting until it is confirmed before initiating a new transaction:
   * Gas prices for new transactions are set using the formula: $2$ $\times$ *Base Fee* $+$ *Aggresive Priority Fee*. This ensures transactions remain marketable for at least six consecutive blocks that are 100% full (see [this article](https://www.blocknative.com/blog/eip-1559-fees#3)).
   * A pending transaction is monitored until it is confirmed.
   * A transaction is removed from the transaction queue only once it is confirmed.
@@ -27,6 +27,7 @@ The transaction queue, current block number, and any pending transaction hash ar
 * Infura is queried for gas price estimates only every new block. Keeping such queries to only occur with each new block help guards against being rate limited by Infura.
 * If gas price queries are rate limited, or fail for any reason, processing of new transactions pauses until gas price estimates resume.
 * Querying missed blocks is done through the Web3 Ethereum API to avoid adding to Infura traffic, thus lowering the risk of being rate-limited by Infura.
+* The future transaction queue remains unchanged until a transaction is executed and confirmed. If there is a network outage causing a transaction submission to fail, the transaction queue remains unchanged, and the bot will simply try again, or successfully execute the transaction when the bot restarts.
 
 ### Transaction Error Management
 * The bot does not allow a new transaction to proceed until the previous transaction has been mined. This helps guard against conflicting nonces, or transactions being frozen in the mempool by prior unmined transactions. This also applies to when there is a new instance of the bot (i.e. whenever it is restarted after a failure). As explained in __*Initialization*__ above, the bot first checks for a still-pending transaction from an earlier instance of the bot. If there is a still-pending transaction, the bot will continue to listen for new blocks and ping events but will not execute any further transactions until the pending transaction is confirmed.
