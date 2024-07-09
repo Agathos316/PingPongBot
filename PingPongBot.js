@@ -9,7 +9,7 @@
  * @dev Bot settings to be configured by the user.
  */
 const DEPLOYMENT_TYPE = 'Updateable';   // Either 'Updateable' or 'Not-Updateable', depending on whether the console can handle same-line updates.
-const mockupFromBlock = '6268440';     // Set this to do a mock start a the designed block number.
+const mockupFromBlock = '6269090';     // Set this to do a mock start a the designed block number.
 
 
 /***************************************************
@@ -166,7 +166,8 @@ async function processLatestBlock(blockNumber) {
     // Update gas price estimates first, in case a tx is needed soon.
     let priorityFeeGwei;
     let fastPriorityFeeGwei;
-    let baseFeeGwei;
+    let baseFeeGwei = undefined;
+    safeMaxFeeGwei = undefined;    // This is to ensure that no txs are attempted if we are not getting gas information.
     // Get the priority fee estimate.
     axios.post(infuraEndpoint, { jsonrpc: '2.0', method: 'eth_maxPriorityFeePerGas', params: [], id: 1 })   // Results returned in WEI.
     .then((response) => {
@@ -271,13 +272,13 @@ async function processLatestBlock(blockNumber) {
 
         // If there is currently a pending tx, then compare its gas price with the current gas price, and resubmit the tx if the current gas price exceeds 80% of the submitted price.
         if (STATE_pendingTx) {
-            if (baseFeeGwei > pendingGasPriceGwei * 0.8) {
+            if (baseFeeGwei != undefined && pendingGasPriceGwei != '' && baseFeeGwei > pendingGasPriceGwei * 0.8) {
                 prepareAndSendTx(pendingPongData, pendingNonce);
             }
         // If the tx queue is not currently being processed, then initiate a check of the transaction queue for any new txs that need to be processed.
         } else if (!STATE_processingQueue) {
-            // Only output block number and gas fee if we are not monitoring a pending tx and we're using an updateable console.
-            if (DEPLOYMENT_TYPE == 'Updateable') {
+            // If we are not processing the tx queue, then only output here if we're using an updateable console, or the block number is divisible by 100 (i.e. output every hundredth block if not a same-line updateable console).
+            if (DEPLOYMENT_TYPE == 'Updateable' || blockNumber % 100 == 0) {
                 clearInterval(workingAnimationID);
                 setWorkingString('\nLatest block number ' + blockNumber + ', Safe max gas fee: ' + safeMaxFeeGwei + ' GWEI ', '\n');
             }
