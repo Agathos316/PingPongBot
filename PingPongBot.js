@@ -6,14 +6,14 @@
 
 
 /***************************************************
- * @dev Bot settings to be configured by the user.
+ * Bot settings to be configured by the user.
  */
-const DEPLOYMENT_TYPE = 'Updateable';   // Either 'Updateable' or 'Not-Updateable', depending on whether the console can handle same-line updates.
+const DEPLOYMENT_TYPE = 'Not-Updateable';   // Either 'Updateable' or 'Not-Updateable', depending on whether the console can handle same-line updates.
 const mockupFromBlock = '';     // Set this to do a mock start at the designated block number, for testing purposes only.
 
 
 /***************************************************
- * @dev Import/Require necessary packages.
+ * Import/Require necessary packages.
  */
 // These lines make "require" available even though this file is of "type": "module".
 import { createRequire } from "module";
@@ -56,6 +56,7 @@ let STATE_handlingConfirmedTx = false;
     - addressBotIsRunningWith: the account address the bot is or was running with last.
     - firstLoadBlockNumber: the block number when the bot first started using the current account address.
     - lastCheckedBlockNumber: the block number most recently listened to for Ping events.
+    - botInstanceStartBlock: the block number at which the bot started this current instance.
     - txQueue: a String of the Ping hashes to send, delimitered by '@'.
     - pendingTx: the hash of the pending tx.
 */
@@ -73,6 +74,7 @@ const accountAddress = process.env.ACC_ADDRESS;
 const privateKey = '0x' + process.env.PRIVATE_KEY;
 const signer = web3.eth.accounts.privateKeyToAccount(privateKey);   // Create a signing account from a private key.
 const startManualStatusCheckAfterNumBlocks = 15;    // The number of blocks after which the bot will start manually checking the status of a still-pending tx.
+const blockReviewInterval = 500;        // The number of blocks to repeatedly review Ping events and Pong txs, to ensure no missed Pings.
 const workingFrames = ['>    ', '_>   ', '__>  ', '___> ', '____>', '_____>', '______>', '______<', '_____< ',  '____< ', '___< ', '__<  ', '_<   ', '<    '];
 colors.setTheme({
     actionColor: 'green',  
@@ -89,14 +91,16 @@ colors.setTheme({
  */
 // Must initialize the storage package before using it. Can use default options.
 await storage.init();
-// Prepare the bot if this is a mock-run (for testing purposes).
+// If this is a mock-run, then prepare the bot accordingly (for testing purposes only).
 if (mockupFromBlock != '') {
     console.log(('!!Mockup run in progress!!').titleColor);
     await storage.setItem('addressBotIsRunningWith', accountAddress);
     await storage.setItem('firstLoadBlockNumber', mockupFromBlock - 10);
     await storage.setItem('lastCheckedBlockNumber', mockupFromBlock);
+    await storage.setItem('botInstanceStartBlock', mockupFromBlock - 10);
     await storage.setItem('txQueue', '');
     await storage.setItem('pendingTx', '');
+    await storage.setItem('txHistory', '');
 }
 // Call the main initialization function.
 initBot();
@@ -170,6 +174,10 @@ async function initBot() {
  * @param blockNumber - the lastest block number (Number).
  */
 async function processLatestBlock(blockNumber) {
+
+    /**************************************
+     * Block processing - Part A
+     **************************************/
     latestBlockNumber = blockNumber;
     // Update gas price estimates first, in case a tx is needed soon.
     let priorityFeeGwei;
@@ -189,95 +197,133 @@ async function processLatestBlock(blockNumber) {
             let maxFeeGwei = parseFloat(Number(web3.utils.fromWei(maxFeeWei, 'gwei')).toFixed(4));
             baseFeeGwei = (maxFeeGwei - priorityFeeGwei).toFixed(4);
             safeMaxFeeGwei = Number(2 * Number(baseFeeGwei) + Number(fastPriorityFeeGwei)).toFixed(4);
-            finishLatestBlockProcessing();      // This function is just a few lines below here.
+            blockProcessingParts_B_C();      // This function is just a few lines below here.
         })
         .catch((err) => { genericErrHandler(err,'fetching Sepolia gas price from Infura'); });
     })
     .catch((err) => { genericErrHandler(err,'fetching Sepolia max priority fee from Infura'); });
     
+    /**************************************
+     * Block processing - Parts B and C
+     **************************************/
     // Put this in a function, and call it in the code above to ensure gas estimates are complete before executing this code.
-    async function finishLatestBlockProcessing() {
+    async function blockProcessingParts_B_C() {
 
+        /**************************************
+         * Block processing - Part B
+         **************************************/
         // If the bot is just starting (this is the first block header it has seen), then perform some special functions.
-        if (BOT_STARTING) {
-            BOT_STARTING = false;       // Undo the BOT_STARTING flag.
-            clearInterval(workingAnimationID);
-            logUpdate(('\n' + new Date(Date.now()).toUTCString()).titleColor);
-            logUpdate.done();
+        async function blockProcessingPart_B() {
+            if (BOT_STARTING) {
+                BOT_STARTING = false;       // Undo the BOT_STARTING flag.
+                clearInterval(workingAnimationID);
+                logUpdate(('\n' + new Date(Date.now()).toUTCString()).titleColor);
+                logUpdate.done();
 
-            // If this is a new original start for the bot with this account address, then save block number as the one when the bot started.
-            let ORIGINAL_BOT_RUN = false;
-            try {
-                firstLoadBlockNumber = await storage.getItem('firstLoadBlockNumber');
-                addressBotIsRunningWith = await storage.getItem('addressBotIsRunningWith');
-            } catch (err) {
-                // If an error is thrown, it is because the storage items have not been created. This is an original deployment.
-                ORIGINAL_BOT_RUN = true;
-            }
-            // If the bot has never run previously with this account.
-            if (firstLoadBlockNumber == '' || accountAddress != addressBotIsRunningWith) {
-                ORIGINAL_BOT_RUN = true;
-            }
-
-            // If this is an original run for this account.
-            if (ORIGINAL_BOT_RUN) {
-                firstLoadBlockNumber = blockNumber;
-                ///* -> -> THIS LINE IS USED FOR TESTING PURPOSES ONLY -> -> */ if (MOCKUP) firstLoadBlockNumber = mockupFirstLoadBlockNumber;
-                console.log('Bot is running for the first time on this address, starting at block number ' + firstLoadBlockNumber + '.');
-                // Setup storage.
-                await storage.setItem('addressBotIsRunningWith', accountAddress);
-                await storage.setItem('firstLoadBlockNumber', firstLoadBlockNumber);
-                await storage.setItem('lastCheckedBlockNumber', '');
-                await storage.setItem('txQueue', '');
-                await storage.setItem('pendingTx', '');
-            // Else this is a new instance of a previously started session.
-            } else {
-                console.log('Bot has run with this account before, originally starting at block number ' + firstLoadBlockNumber + '.');
-                // Get the last checked block number from a previous session.
-                let fromBlock = await storage.getItem('lastCheckedBlockNumber');
-                ///* -> -> THIS LINE IS USED FOR TESTING PURPOSES ONLY -> -> */ if (mockupFromBlock != '') fromBlock = mockupFromBlock;
-                if (fromBlock == '') {
-                    console.log(('Storage item "lastCheckedBlockNumber" failed to be set in the previous bot session. Ignoring and waiting for next block.').errorColor);
+                // If this is a new original start for the bot with this account address, then save block number as the one when the bot started.
+                let ORIGINAL_BOT_RUN = false;
+                try {
+                    firstLoadBlockNumber = await storage.getItem('firstLoadBlockNumber');
+                    addressBotIsRunningWith = await storage.getItem('addressBotIsRunningWith');
+                } catch (err) {
+                    // If an error is thrown, it is because the storage items have not been created. This is an original deployment.
+                    ORIGINAL_BOT_RUN = true;
                 }
-                console.log('Bot ended previous session at block number ' + fromBlock + '.');
-                console.log('Current bot session starting at block number ' + blockNumber + '.');
+                // If the bot has never run previously with this account.
+                if (firstLoadBlockNumber == '' || accountAddress != addressBotIsRunningWith) {
+                    ORIGINAL_BOT_RUN = true;
+                }
 
-                // Check for a pending tx from a previous bot session, and handle the outcome.
-                await manuallyCheckPendingTx(true)
-                .then(async () => {
-                    // Check in between sessions for any missed Ping events.
-                    fromBlock = Number(fromBlock) + 1;      // Search is inclusive of this block number itself.
-                    let toBlock = blockNumber - 1;          // Search is inclusive of this block number itself.
-                    if (fromBlock < toBlock) {
-                        console.log(('\nMissed blocks ' + fromBlock + ' to ' + toBlock + ' in between bot sessions.').infoColor);
-                        console.log('Checking for missed Ping events in that period...');
-                        await checkForMissedBlocks(fromBlock, toBlock);
+                // If this is an original run for this account.
+                if (ORIGINAL_BOT_RUN) {
+                    firstLoadBlockNumber = blockNumber;
+                    ///* -> -> THIS LINE IS USED FOR TESTING PURPOSES ONLY -> -> */ if (MOCKUP) firstLoadBlockNumber = mockupFirstLoadBlockNumber;
+                    console.log('Bot is running for the first time on this address, starting at block number ' + firstLoadBlockNumber + '.');
+                    // Setup storage.
+                    await storage.setItem('addressBotIsRunningWith', accountAddress);
+                    await storage.setItem('firstLoadBlockNumber', firstLoadBlockNumber);
+                    await storage.setItem('lastCheckedBlockNumber', '');
+                    await storage.setItem('botInstanceStartBlock', blockNumber);
+                    await storage.setItem('txQueue', '');
+                    await storage.setItem('pendingTx', '');
+                    await storage.setItem('txHistory', '');
+                // Else this is a new instance of a previously started session.
+                } else {
+                    console.log('Bot has run with this account before, originally starting at block number ' + firstLoadBlockNumber + '.');
+                    // Get the last checked block number from a previous session.
+                    let fromBlock = await storage.getItem('lastCheckedBlockNumber');
+                    if (mockupFromBlock == '') {     // 'mockupFromBlock' is used for testing purposes only.
+                        await storage.setItem('botInstanceStartBlock', blockNumber);
                     }
-                })
-            }
+                    await storage.setItem('txHistory', '');
+                    ///* -> -> THIS LINE IS USED FOR TESTING PURPOSES ONLY -> -> */ if (mockupFromBlock != '') fromBlock = mockupFromBlock;
+                    if (fromBlock == '') {
+                        console.log(('Storage item "lastCheckedBlockNumber" failed to be set in the previous bot session. Ignoring and waiting for next block.').errorColor);
+                    }
+                    console.log('Bot ended previous session at block number ' + fromBlock + '.');
+                    if (mockupFromBlock == '') {    // 'mockupFromBlock' used for testing purposes only.
+                        console.log('Current bot session starting at block number ' + blockNumber + '.');
+                    } else {
+                        console.log('Current bot session starting at block number ' + await storage.getItem('botInstanceStartBlock') + '.');
+                    }
 
-        // If the bot has already processed at least one new block header.
-        } else {
-            // Check that no blocks have been missed, for example due to internet going down temporarily.
-            let previouslyCheckedBlockNumber = Number(await storage.getItem('lastCheckedBlockNumber'));
-            let distanceBetweenBlockNumbers = blockNumber - previouslyCheckedBlockNumber;
-            if (distanceBetweenBlockNumbers > 1) {
-                let fromBlock = previouslyCheckedBlockNumber + 1;   // Search is inclusive of this block number itself.
-                let toBlock = blockNumber - 1;                      // Search is inclusive of this block number itself.
-                if (fromBlock <= toBlock) {
-                    clearInterval(workingAnimationID);
-                    logUpdate(('\n' + new Date(Date.now()).toUTCString()).titleColor);
-                    logUpdate.done();
-                    console.log(('Missed blocks ' + fromBlock + ' to ' + toBlock + '.').infoColor);
-                    console.log('Checking for missed Ping events in that period...');
-                    checkForMissedBlocks(fromBlock, toBlock);
+                    // Check for a pending tx from a previous bot session, and handle the outcome.
+                    await manuallyCheckPendingTx(true)
+                    .then(async () => {
+                        // Check in between sessions for any missed Ping events.
+                        fromBlock = Number(fromBlock) + 1;      // Search is inclusive of this block number itself.
+                        let toBlock = blockNumber - 1;          // Search is inclusive of this block number itself.
+                        if (fromBlock < toBlock) {
+                            console.log(('\nMissed blocks ' + fromBlock + ' to ' + toBlock + ' in between bot sessions.').infoColor);
+                            console.log('Checking for missed Ping events in that period...');
+                            await checkForMissedPings(fromBlock, toBlock);
+                        }
+                    })
                 }
+
+            // If the bot has already processed at least one new block header.
+            } else {
+                // Check that no blocks have been missed, for example due to internet going down temporarily.
+                async function checkForMissedBlocksBetweenInstances() {
+                    let previouslyCheckedBlockNumber = Number(await storage.getItem('lastCheckedBlockNumber'));
+                    let blockDistance = blockNumber - previouslyCheckedBlockNumber;
+                    if (blockDistance > 1) {
+                        let fromBlock = previouslyCheckedBlockNumber + 1;   // Search is inclusive of this block number itself.
+                        let toBlock = blockNumber - 1;                      // Search is inclusive of this block number itself.
+                        if (fromBlock <= toBlock) {
+                            clearInterval(workingAnimationID);
+                            logUpdate(('\n' + new Date(Date.now()).toUTCString()).titleColor);
+                            logUpdate.done();
+                            console.log(('Missed blocks ' + fromBlock + ' to ' + toBlock + '.').infoColor);
+                            console.log('Checking for missed Ping events in that period...');
+                            await checkForMissedPings(fromBlock, toBlock);
+                        }
+                    }
+                }
+                await checkForMissedBlocksBetweenInstances()
+                .then(async () => {
+                    // Every 'x' blocks, check that no ping events have been missed, in case of network issues, and process them if they have.
+                    let blockDistance = blockNumber - await storage.getItem('botInstanceStartBlock');
+                    if (blockDistance % blockReviewInterval == 0 ) {
+                        let toBlock = blockNumber - 1;                      // Search is inclusive of this block number itself.
+                        let fromBlock = toBlock - blockReviewInterval + 1;  // Search is inclusive of this block number itself.
+                        clearInterval(workingAnimationID);
+                        logUpdate((`Reviewing the previous ${blockReviewInterval} blocks for missed Pings (blocks ${fromBlock} to ${toBlock})...`).actionColor);
+                        logUpdate.done();
+                        await checkForMissedPings(fromBlock, toBlock);
+                    }
+                });
             }
         }
 
+        // Wait to perform the first part (the function above).
+        await blockProcessingPart_B();
+
+        /**************************************
+         * Block processing - Part C
+         **************************************/
         // Store the block number as the latest block that has been checked by the bot.
         await storage.setItem('lastCheckedBlockNumber', blockNumber);
-
         // If there is currently a pending tx.
         if (STATE_pendingTx) {
             // If the tx has been pending for more than 'x' blocks, start manually checking its status, as we may have missed the 'on("receipt")' event due to network faults.
@@ -521,6 +567,14 @@ async function handleConfirmedTx(blockNumber) {
         txQueue = txQueue.replace(pendingPongData, '');
     }
     await storage.setItem('txQueue', txQueue);
+    // Update the tx history.
+    let txHistory = await storage.getItem('txHistory');
+    if (txHistory == '') {
+        txHistory = pendingPongData;
+    } else {
+        txHistory = txHistory + '@' + pendingPongData;
+    }
+    await storage.setItem('txHistory', txHistory);
     // Update other variables.
     await storage.setItem('pendingTx', '');
     STATE_pendingTx = false;
@@ -545,9 +599,7 @@ async function handleConfirmedTx(blockNumber) {
  * @param fromBlock - the block number when to start looking, inclusive of itself (Number/String/BN/BigNumber).
  * @param toBlock - the block number when to stop looking, inclusive of itself (Number/String/BN/BigNumber).
  */
-async function checkForMissedBlocks(fromBlock, toBlock) {
-    //console.log('Checking for missed pings in blocks ' + fromBlock + ' to ' + toBlock + '...');
-
+async function checkForMissedPings(fromBlock, toBlock) {
     // Get contract events.
     let missedPings = await contract.getPastEvents('Ping', {
         fromBlock: fromBlock,
@@ -555,19 +607,22 @@ async function checkForMissedBlocks(fromBlock, toBlock) {
     });
     // If there are no missed Ping events found...
     if (missedPings.length == 0) {
-        console.log('No missing Ping events in that period.');
+        console.log('No missed Ping events in that period.');
     // There are missed Ping events...
     } else {
         // Add unique and new Ping events to the tx queue.
         async function processMissedPings() {
-            // Check that the hash is not already in the queue.
+            // Check that the hash is not already in the queue, nor in the tx history.
             txQueue = await storage.getItem('txQueue');
+            let txHistory = await storage.getItem('txHistory');
             for (let i = 0; i < missedPings.length; i++) {
                 let hash = missedPings[i].transactionHash;
-                // If the hash is not in the queue, then add it to the queue. Else ignore it.
-                if (txQueue == '' || !txQueue.includes(hash)) {
-                    await addToQueue(hash);
-                    console.log('Ping found at block number ' + missedPings[i].blockNumber + '. Tx hash ' + condenseHashString(hash) + ' added to queue.');
+                // If the hash is not in the tx queue or tx history, then add it to the queue. Else ignore it.
+                if (txHistory == '' || !txHistory.includes(hash)) {
+                    if (txQueue == '' || !txQueue.includes(hash)) {
+                        await addToQueue(hash);
+                        console.log('Ping found at block number ' + missedPings[i].blockNumber + '. Tx hash ' + condenseHashString(hash) + ' added to queue.');
+                    }
                 }
             }
             return;
