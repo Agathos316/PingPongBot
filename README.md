@@ -17,6 +17,7 @@ A bot to respond to ping events with calls to the pong method of the PingPong sm
   * A pending transaction is monitored until it is confirmed.
   * A ping hash is removed from the queue only once its pong transaction is confirmed.
   * Network gas prices continue to be updated every block. If network gas prices increase too much, preventing a transaction from being mined, the bot resubmits the transaction at an updated gas price using the formula above (and using the same nonce as the original pending transaction).
+* Every 500 blocks, the bot checks for any ping events that were not responded to, and adds their hashes to the transaction queue.
 
 ## Error Management
 ### Safe-Restart
@@ -28,6 +29,7 @@ The transaction queue, current block number, and any pending transaction hash ar
 * At each new block, the bot checks whether any blocks were missed by checking for contiguous block numbers. If blocks were missed, the missed blocks are searched for ping events. Missed ping events will have their hashes added to the transaction queue. This is a fail-safe mechanism in case of downtime or rate-limiting in the Infura block listener. (Infura is used for new block listening, as it fires new block events in a more timely fashion than the Web3 library.)
 * Querying missed blocks is done through the Web3 Ethereum API to avoid adding more bot traffic to the Infura node, thus lowering the risk of being rate-limited by Infura.
 * Ping hashes are only removed from the transaction queue when their pong transaction is executed and confirmed. If there is a network outage causing a transaction submission to fail, the transaction queue remains unchanged, and the bot will simply try again, or successfully execute the transaction when the bot restarts.
+* Every 500 blocks (approximately 2 hours) the bot checks for any ping events that were not responded to. This is to handle issues on the deployment server and network problems.
 * In the case of a network outage, the bot may have submitted a transaction but not receive notification that it has been mined. This may be detrimental because of the use of a strict transaction queue (i.e. future transactions will not be processed). If a transaction appears to be pending for a long time (15 or more blocks), the bot will begin probing the transaction status with each new block (in addition to also listening for the network to trigger a confirmation event). In this way, a confirmed transaction is sure to be identified as such, even if the bot does not receive the confirmation event associated with the `sendSignedTransaction()` method.
 
 ### Transaction Error Management
