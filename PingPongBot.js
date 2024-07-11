@@ -294,7 +294,11 @@ async function processLatestBlock(blockNumber) {
                             clearInterval(workingAnimationID);
                             logUpdate(('\n' + new Date(Date.now()).toUTCString()).titleColor);
                             logUpdate.done();
-                            console.log(('Missed blocks ' + fromBlock + ' to ' + toBlock + '.').infoColor);
+                            if (fromBlock == toBlock) {
+                                console.log(('Missed block detected: ' + fromBlock + '.').infoColor);
+                            } else {
+                                console.log(('Missed blocks detected: ' + fromBlock + ' to ' + toBlock + '.').infoColor);
+                            }
                             console.log('Checking for missed Ping events in that period...');
                             await checkForMissedPings(fromBlock, toBlock);
                         }
