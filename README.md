@@ -39,7 +39,7 @@ The transaction queue, current block number, and any pending transaction hash ar
 * If a transaction errors from the network (not from the bot's code), the bot aborts processing the transaction queue entirely. It waits for the next block, as this will allow necessary parameters to refresh, which then allows the bot to restart processing the transaction queue anew. This method successfully mitigates the plausible transaction errors that might be present (such as a competing nonce, out of gas, etc.).
 
 ### Missed Ping Prevention
-As described under the __*Protocol*__ heading, any blocks that are missed (prior to, or during a bot instance) are checked for ping events, and the transaction queue is updated accordingly.
+As described under the __*Protocol*__ heading, any blocks that are missed (prior to, or during a bot instance) are checked for ping events, and the transaction queue is updated accordingly. Every 500 blocks, a search is also made for missed ping events.
 
 ### Duplicate Pong Prevention
 * Duplicate pong responses are avoided by implementing a strict transaction queue, allowing only one transaction pending at a time. Only failed or stuck transactions are resubmitted (with the same nonce to prevent duplicate pongs), else no further transacting occurs until the pending transaction is confirmed.
