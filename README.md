@@ -10,13 +10,13 @@ A bot to respond to ping events with calls to the pong method of the PingPong sm
   * If missed ping events are found, the bot adds their hashes to a transaction queue, in the order that the ping events occurred.
 
 ## Protocol
-* The bot listens for new block headers and updates the estimated maximum gas price every block.
+* The bot listens for new block headers.
 * The bot adds ping event hashes to a single future transaction queue.
 * The bot processes one transaction from the queue at a time, waiting until it is confirmed before initiating a new transaction:
   * Gas prices for new transactions are set using the formula: $2$ $\times$ *Base Fee* $+$ *Aggresive Priority Fee*. This ensures transactions remain marketable for at least six consecutive blocks that are 100% full (see [this article](https://www.blocknative.com/blog/eip-1559-fees#3)).
   * A pending transaction is monitored until it is confirmed.
   * A ping hash is removed from the queue only once its pong transaction is confirmed.
-  * Network gas prices continue to be updated every block. If network gas prices increase too much, preventing a transaction from being mined, the bot resubmits the transaction at an updated gas price using the formula above (and using the same nonce as the original pending transaction).
+  * Network gas prices continue to be updated every block while a transaction is pending. If network gas prices increase too much, preventing a transaction from being mined, the bot resubmits the transaction at an updated gas price using the formula above (and using the same nonce as the original pending transaction).
 * Every 500 blocks, the bot checks for any ping events that were not responded to, and adds their hashes to the transaction queue.
 
 ## Error Management
@@ -24,12 +24,12 @@ A bot to respond to ping events with calls to the pong method of the PingPong sm
 The transaction queue, current block number, and any pending transaction hash are written to storage in real-time, to ensure that if the bot stops, it can restart with all the necessary information to perform the full initialization described above.
 
 ### Rate-Limiting Prevention and Network Outage Handling
-* Infura is queried for gas price estimates because it allows deduction of the base fee and priority fee. (The Web3 Ethereum library does not allow this level of specificity.) Infura is queried for this only every new block. Keeping such queries to only occur with each new block helps guard against being rate limited by Infura.
+* Infura is queried for gas price estimates because it allows deduction of the base fee and priority fee. (The Web3 Ethereum library does not allow this level of specificity.) Infura is queried for this only when a transaction is being created, or every block while a transaction is pending. This helps guard against being rate limited by Infura.
 * If gas price queries are rate limited, or fail for any reason, executing of new transactions pauses until gas price estimates resume.
 * At each new block, the bot checks whether any blocks were missed by checking for contiguous block numbers. If blocks were missed, the missed blocks are searched for ping events. Missed ping events will have their hashes added to the transaction queue. This is a fail-safe mechanism in case of downtime or rate-limiting in the Infura block listener. (Infura is used for new block listening, as it fires new block events in a more timely fashion than the Web3 library.)
 * Querying missed blocks is done through the Web3 Ethereum API to avoid adding more bot traffic to the Infura node, thus lowering the risk of being rate-limited by Infura.
 * Ping hashes are only removed from the transaction queue when their pong transaction is executed and confirmed. If there is a network outage causing a transaction submission to fail, the transaction queue remains unchanged, and the bot will simply try again, or successfully execute the transaction when the bot restarts.
-* Every 500 blocks (approximately 2 hours) the bot checks for any ping events that were not responded to, adding their hashes to the transaction queue. This is to handle issues on the deployment server and network problems. An interval as high as 500 blocks is chosen to not add unnecessaryily frequent traffic to the Infura node, risking being rate limited.
+* Every 270 blocks (approximately 1 hour) the bot checks for any ping events that were not responded to, adding their hashes to the transaction queue. If this fails, the failure is logged and the next 270-block mark will check the previous 1000 blocks, and so on. This regular check is to handle issues on the deployment server and network problems. An interval as high as 270 blocks is chosen to not add unnecessaryily frequent traffic to the Infura node, risking being rate limited, yet not be so large that the potential delay in finding missed ping events becomes unacceptably long.
 * In the case of a network outage, the bot may have submitted a transaction but not receive notification that it has been mined. This may be detrimental because of the use of a strict transaction queue (i.e. future transactions will not be processed). If a transaction appears to be pending for a long time (15 or more blocks), the bot will begin probing the transaction status with each new block (in addition to also listening for the network to trigger a confirmation event). In this way, a confirmed transaction is sure to be identified as such, even if the bot does not receive the confirmation event associated with the `sendSignedTransaction()` method.
 
 ### Transaction Error Management
@@ -39,7 +39,7 @@ The transaction queue, current block number, and any pending transaction hash ar
 * If a transaction errors from the network (not from the bot's code), the bot aborts processing the transaction queue entirely. It waits for the next block, as this will allow necessary parameters to refresh, which then allows the bot to restart processing the transaction queue anew. This method successfully mitigates the plausible transaction errors that might be present (such as a competing nonce, out of gas, etc.).
 
 ### Missed Ping Prevention
-As described under the __*Protocol*__ heading, any blocks that are missed (prior to, or during a bot instance) are checked for ping events, and the transaction queue is updated accordingly. Every 500 blocks, a search is also made for missed ping events.
+As described under the __*Protocol*__ heading, any blocks that are missed (prior to, or during a bot instance) are checked for ping events, and the transaction queue is updated accordingly. Every 270 blocks, a search is also made for missed ping events.
 
 ### Duplicate Pong Prevention
 * Duplicate pong responses are avoided by implementing a strict transaction queue, allowing only one transaction pending at a time. Only failed or stuck transactions are resubmitted (with the same nonce to prevent duplicate pongs), else no further transacting occurs until the pending transaction is confirmed.
