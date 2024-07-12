@@ -17,7 +17,7 @@ A bot to respond to ping events with calls to the pong method of the PingPong sm
   * A pending transaction is monitored until it is confirmed.
   * A ping hash is removed from the queue only once its pong transaction is confirmed.
   * Network gas prices continue to be updated every block while a transaction is pending. If network gas prices increase too much, preventing a transaction from being mined, the bot resubmits the transaction at an updated gas price using the formula above (and using the same nonce as the original pending transaction).
-* Every 500 blocks, the bot checks for any ping events that were not responded to, and adds their hashes to the transaction queue.
+* Every 270 blocks (approx. 1 hour), the bot checks for any ping events that were not responded to, and adds their hashes to the transaction queue.
 
 ## Error Management
 ### Safe-Restart
