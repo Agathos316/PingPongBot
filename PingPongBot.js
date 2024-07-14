@@ -76,7 +76,7 @@ const accountAddress = process.env.ACC_ADDRESS;
 const privateKey = '0x' + process.env.PRIVATE_KEY;
 const signer = web3.eth.accounts.privateKeyToAccount(privateKey);   // Create a signing account from a private key.
 const startManualStatusCheckAfterNumBlocks = 15;    // The number of blocks after which the bot will start manually checking the status of a still-pending tx.
-const blockReviewInterval = 270;        // The number of blocks to repeatedly review Ping events and Pong txs, to ensure no missed Pings.
+const blockReviewInterval = 2160;        // The number of blocks to repeatedly review Ping events and Pong txs, to ensure no missed Pings.
 const workingFrames = ['>    ', '_>   ', '__>  ', '___> ', '____>', '_____>', '______>', '______<', '_____< ',  '____< ', '___< ', '__<  ', '_<   ', '<    '];
 colors.setTheme({
     actionColor: 'green',  
