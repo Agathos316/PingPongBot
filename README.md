@@ -1,7 +1,7 @@
 # Ping Pong Bot: Explainer document
 A bot to respond to ping events with calls to the pong method of the PingPong smart contract at [0xA7F42ff7433cB268dD7D59be62b00c30dEd28d3D](https://sepolia.etherscan.io/txs?a=0xa7f42ff7433cb268dd7d59be62b00c30ded28d3d) (Sepolia)
 
-_PingPongBot.js_ is the more user-friendly node.js code. _PingPongBot (minimal).js_ is a stripped-down version with 30% less code by removing most console output, code for testing, and keeping only the core functions for the bot to run.
+_PingPongBot.js_ is the more user-friendly node.js code. _PingPongBot (minimal).js_ is a stripped-down version with 30% less code by removing most console output and code for testing, keeping only the core functions for the bot to run.
 
 ## Initialization
 * Upon starting, the bot immediately listens for Ping events and for new block headers.
